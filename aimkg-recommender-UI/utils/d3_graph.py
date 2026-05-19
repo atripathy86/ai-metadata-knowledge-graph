@@ -16,7 +16,6 @@
 
 import neo4j
 
-# TODO: Handle node duplicates - create a dict of nodes and append them to node list.
 def neo4j_to_d3(results):
     """
     Converts a list of Neo4j query results into D3.js format.

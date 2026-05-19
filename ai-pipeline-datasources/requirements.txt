@@ -1,4 +1,4 @@
-pdfminer
-pandas
-paperswithcode-client
-inflect
+pdfminer>=20221105
+pandas>=2.0,<3.0
+paperswithcode-client>=0.1.0
+inflect>=7.0,<8.0

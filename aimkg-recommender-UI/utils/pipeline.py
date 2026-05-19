@@ -1,38 +1,24 @@
-task_category_vocab = ['recognition', 'regression','reconstruction', 'segmentation', 'detection', 'generation', 'harmonization', 'translation', 'classification', 'adaptation', 'search', 'analysis',
-'extraction', 'retrieval', 'annotation', 'generalization', 'augmentation', 'anonymization', 'prediction', 'correlation', 'fusion', 'matching', 'synthesis', 'understanding',
-'testing', 'parsing', 'identification', 'transfer', 'spotting', 'estimation', 'resolution', 'clustering', 'separation', 'localization', 'summarization', 'reccommendation',
-'expansion', 'labeling', 'imaging', 'interpretation', 'captioning', 'retrieval', 'selection', 'assessment', 'registration', 'forecasting', 'planning', 'tracking', 'inference',
-'grounding', 'disambiguation', 'reasoning', 'comprehension', 'reading', 'reduction', 'completion', 'compression', 'decomposition', 'learning', 'sampling', 'verification', 'animation',
-'interpolation', 'visualizaiton', 'propagation', 'mining', 'surveillance', 'diagnosis', 'ranking', 'optimization', 'synthesis', 'anomaly', 'linking']
+import logging
+import os
+import time
 
-# Task Modality vocabulary
-image_vocab = ['2d', '3d', 'image', 'visual', 'depth', 'pixel', 'voxel', 'RBG', 'action', 'object', 'facial',
-'pose', 'grayscale', 'texture', 'pattern','face', 'scene', 'imagery', 'imaging', 'image-based', 'vision', 'computer-vision', 'computer vision']
-text_vocab = ['text', 'word', 'language', 'lingual', 'dialogue', 'dialog', 'corpus', 'sentence', 'reading', 'news', 'reviews', 
-'grammar', 'grammatical', 'natural-language-processing', 'nlp', 'natural language processing',
-'textual', 'translation', 'question', 'answering', 'conversational', 'conversation', 'entity', 'document', 'paragraph', 'paraphrase']
-video_vocab = ['video', 'video-based', 'motion']
-audio_vocab = ['audio', 'voice', 'speech', 'sound', 'headphone', 'music', 'spoken']
-multi_vocab = ['multi', 'cross', 'multimodal', 'crossmodal', 'multi-modal']
-super_class = ['image', 'text', 'video', 'audio']
-
-
-
+import torch
+import torch.nn.functional as F
+import h5py
+from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 from .neo4j_connection import Neo4jConnection
 from .d3_graph import neo4j_to_d3
-from dotenv import load_dotenv
-import os
-import torch
-from sentence_transformers import SentenceTransformer
-import torch.nn.functional as F
-import time
-import h5py
-import glob
+from .similarity_utils import (
+    task_category_vocab, image_vocab, text_vocab, video_vocab, audio_vocab,
+    multi_vocab, super_class,
+    find_file_path, create_tokens, compute_IOU, compute_category, compute_modality,
+)
+
+logger = logging.getLogger(__name__)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# DEVICE = torch.device("cpu")
-embedding_model = SentenceTransformer("all-mpnet-base-v2").to(DEVICE)
 
 load_dotenv()
 URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -40,68 +26,23 @@ USER = os.getenv("NEO4J_USER_NAME")
 PASSWORD = os.getenv("NEO4J_PASSWD")
 AUTH = (os.getenv("NEO4J_USER_NAME"), os.getenv("NEO4J_PASSWD"))
 
-# Instantiate Neo4j connection
-neo4j_obj = Neo4jConnection(uri=URI, 
-                    user=USER,
-                    pwd=PASSWORD)
+_embedding_model = None
+_neo4j_obj = None
 
 
-def find_file_path(filename, search_directory="."):
-    # Use glob to search recursively in the current directory for the file
-    for file_path in glob.iglob(f"{search_directory}/**/{filename}", recursive=True):
-        return os.path.abspath(file_path)
-    return None
-
-def compute_category(item_tokens):
-    tokens = list(item_tokens)
-    inter = list(set(tokens).intersection(set(task_category_vocab)))
-    if len(inter) > 0:
-        category = ','.join(inter)
-    else:
-        category = "none"
-    return category
+def _get_embedding_model():
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = SentenceTransformer("all-mpnet-base-v2").to(DEVICE)
+    return _embedding_model
 
 
-def compute_modality(item_tokens):
-    tokens = list(item_tokens)
-    modality_list = []
-    # check for images
-    if len(set(tokens).intersection(set(image_vocab))) > 0:
-        modality_list.append('image')
+def _get_neo4j():
+    global _neo4j_obj
+    if _neo4j_obj is None:
+        _neo4j_obj = Neo4jConnection(uri=URI, user=USER, pwd=PASSWORD)
+    return _neo4j_obj
 
-    # check for text
-    elif len(set(tokens).intersection(set(text_vocab))) > 0:
-        modality_list.append('text')
-
-    # check for audio
-    elif len(set(tokens).intersection(set(audio_vocab))) > 0:
-        modality_list.append('audio')
-    
-    # check for video
-    elif len(set(tokens).intersection(set(video_vocab))) > 0:
-        modality_list.append('video')
-    
-    # check for multimodal
-    elif len(set(tokens).intersection(set(multi_vocab))) > 0:
-        modality_list.append('multimodal')
-    else:
-        pass
-    
-    # If title has image and text but not multimodal or cross modal, the following case will capture it
-    if len(set(modality_list).intersection(set(super_class))) > 1:
-        modality_list.append('multimodal')
-    
-    if len(modality_list) > 0:
-        modality = ','.join(modality_list)
-    else:
-        modality = "none"
-    return modality
-
-
-def create_tokens(tid):
-    tokens_ = tid.split(" ")
-    tokens = [t.lower() for t in tokens_]
-    return tokens
 
 def convert_json(result):
     data_dict = {}
@@ -115,15 +56,15 @@ def convert_json(result):
     return data_dict
 
 def get_pipelines():
-    get_pipeline_nodes= """MATCH (n:Pipeline) RETURN properties(n)""" 
-    res = neo4j_obj.query(get_pipeline_nodes)
+    get_pipeline_nodes= """MATCH (n:Pipeline) RETURN properties(n)"""
+    res = _get_neo4j().query(get_pipeline_nodes)
     data_dict = convert_json(res)
     return data_dict
 
 def get_pipeline_node(id):
     get_pipeline_nodes= """MATCH (n:Pipeline {itemID:$id}) RETURN properties(n)"""
     parameters = {'id':id}
-    res = neo4j_obj.query(get_pipeline_nodes, parameters)
+    res = _get_neo4j().query(get_pipeline_nodes, parameters)
     data_dict = convert_json(res)
     return data_dict
 
@@ -149,25 +90,21 @@ def get_result_pipelines(pipeline_ids):
             limit 20
             """
         parameters = {'pipeline_id':pid}
-        res = neo4j_obj.query(query_str, parameters)
+        res = _get_neo4j().query(query_str, parameters)
         results.append(res)
     return results
 
 
 def get_explanations(query_task, top_task_ids, top_sim_scores, task_dict):
     explanations = [] #first element is always query task
-    explanations.append({'title':'Query', 'content': {'Name': query_task.title(), 'Label': 'Pipeline', 
+    explanations.append({'title':'Query', 'content': {'Name': query_task.title(), 'Label': 'Pipeline',
                          'Properties Computed': {}}})
     for i, tid in enumerate(top_task_ids):
         curr_item = task_dict[tid]
-        explanations.append({'title':'Recommendation-'+str(i+1), 'content':{'Name': curr_item['name'].title(), 'Similarity Score':str(round(top_sim_scores[i].item(), 3)), 
+        explanations.append({'title':'Recommendation-'+str(i+1), 'content':{'Name': curr_item['name'].title(), 'Similarity Score':str(round(top_sim_scores[i].item(), 3)),
                              'Similar Properties':{}}})
-    
+
     return explanations
-
-
-def compute_IOU(tokens1, tokens2):
-    return len(set(tokens1).intersection(tokens2))/len(set(tokens1).union(tokens2))
 
 
 def get_token_sim(query_task, task_dict):
@@ -195,14 +132,14 @@ def get_category_sim(query_task, task_dict):
 
 
 def get_similar_pipelines(query_pipeline, num_res=10):
-    print("similar pipeline function called")
+    logger.debug("get_similar_pipelines called")
     start_time = time.time()
     num_res=3
     # check if we are able to calculate modality or category
     # if there are values, then pass this as constraint and pick only those tasks for similarity computation
     # Or, use the stored files and compute cosine similarity.. pick top 200 results and compute custom similarity only for those?
     # have the option to include or exclude modality and category computation in similarity calculation if category and modality are not available
-    
+
     # test - compute just embedding similarity from all the files
     pipeline_dict = get_pipelines()
 
@@ -212,12 +149,12 @@ def get_similar_pipelines(query_pipeline, num_res=10):
     with h5py.File(filepath, 'r') as f:
         # Load the datasets
         embedding_ids = f['embedding_ids'][:]  # Reads all the IDs
-        embeddings = f['embeddings'][:]    
+        embeddings = f['embeddings'][:]
 
     pipeline_ids = [id.decode('utf-8') for id in embedding_ids]  # Decode if IDs are stored as byte strings
     embeddings = torch.tensor(embeddings).to(DEVICE)  # Convert embeddings to a torch tensor
 
-    query_embedding = torch.tensor(embedding_model.encode(str(query_pipeline))).view(1, -1).to(DEVICE)
+    query_embedding = torch.tensor(_get_embedding_model().encode(str(query_pipeline))).view(1, -1).to(DEVICE)
 
     cos_sim =  F.cosine_similarity(query_embedding, embeddings, dim=1)
     # token_sim = torch.tensor(get_token_sim(query_task, task_dict)).to(DEVICE)
@@ -232,13 +169,13 @@ def get_similar_pipelines(query_pipeline, num_res=10):
     indices = sorted_indices[:num_res]
     top_pipeline_ids = [pipeline_ids[idx] for idx in indices]
     top_sim_scores = sorted_tensor[:num_res]
-    print("Len of top pipelines:", len(top_pipeline_ids))
+    logger.debug("Top pipeline count: %d", len(top_pipeline_ids))
     explanations = get_explanations(query_pipeline, top_pipeline_ids, top_sim_scores, pipeline_dict)
     neo4j_results = get_result_pipelines(top_pipeline_ids)
     result_d3_graphs = neo4j_to_d3(neo4j_results)
     result_items = {'nodes': result_d3_graphs['nodes'], 'links':result_d3_graphs['links'], 'explanations':explanations}
     # print(result_items)
-    print("Time Taken:",time.time()-start_time)
+    logger.info("get_similar_pipelines completed in %.2fs", time.time()-start_time)
     similar_item_dict = []
     for id in top_pipeline_ids:
         similar_item_dict.append(get_pipeline_node(id))

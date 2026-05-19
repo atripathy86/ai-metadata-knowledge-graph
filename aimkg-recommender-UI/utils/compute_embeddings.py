@@ -112,7 +112,7 @@ class ComputeEmbeddings():
     
     def model_embeddings(self):
         model_dict = self.get_item_nodes(item='Model')
-        print("Computing dataset embeddings..")
+        print("Computing model embeddings..")
         model_ids = []
         embeddings = []
         for key in tqdm(model_dict):
