@@ -59,6 +59,27 @@ def find_file_path(filename, search_directory="."):
     _file_path_cache[filename] = None
     return None
 
+_pipelines_cache = None
+_pipeline_embedding_ids_cache = None
+_pipeline_embeddings_tensor_cache = None
+
+def _ensure_pipeline_cache():
+    global _pipelines_cache, _pipeline_embedding_ids_cache, _pipeline_embeddings_tensor_cache
+    if _pipelines_cache is not None:
+        return
+    _pipelines_cache = get_pipelines()
+    filename = 'pipeline_embeddings_all.h5'
+    filepath = find_file_path(filename=filename)
+    if filepath is None:
+        raise FileNotFoundError(
+            f"Embedding file '{filename}' not found. Run compute_embeddings.py first."
+        )
+    with h5py.File(filepath, 'r') as f:
+        embedding_ids = f['embedding_ids'][:]
+        embeddings = f['embeddings'][:]
+    _pipeline_embedding_ids_cache = [eid.decode('utf-8') for eid in embedding_ids]
+    _pipeline_embeddings_tensor_cache = torch.tensor(embeddings).to(DEVICE)
+
 def compute_category(item_tokens):
     tokens = list(item_tokens)
     inter = list(set(tokens).intersection(set(task_category_vocab)))
@@ -208,22 +229,10 @@ def get_similar_pipelines(query_pipeline, num_res=10):
     # have the option to include or exclude modality and category computation in similarity calculation if category and modality are not available
     
     # test - compute just embedding similarity from all the files
-    pipeline_dict = get_pipelines()
-
-
-    filename = 'pipeline_embeddings_all.h5'
-    filepath = find_file_path(filename=filename)
-    if filepath is None:
-        raise FileNotFoundError(
-            f"Embedding file '{filename}' not found. Run compute_embeddings.py first."
-        )
-    with h5py.File(filepath, 'r') as f:
-        # Load the datasets
-        embedding_ids = f['embedding_ids'][:]  # Reads all the IDs
-        embeddings = f['embeddings'][:]    
-
-    pipeline_ids = [id.decode('utf-8') for id in embedding_ids]  # Decode if IDs are stored as byte strings
-    embeddings = torch.tensor(embeddings).to(DEVICE)  # Convert embeddings to a torch tensor
+    _ensure_pipeline_cache()
+    pipeline_dict = _pipelines_cache
+    pipeline_ids = _pipeline_embedding_ids_cache
+    embeddings = _pipeline_embeddings_tensor_cache
 
     query_embedding = torch.tensor(embedding_model.encode(str(query_pipeline))).view(1, -1).to(DEVICE)
 
@@ -247,9 +256,9 @@ def get_similar_pipelines(query_pipeline, num_res=10):
     result_items = {'nodes': result_d3_graphs['nodes'], 'links':result_d3_graphs['links'], 'explanations':explanations}
     # print(result_items)
     print("Time Taken:",time.time()-start_time)
-    similar_item_dict = []
-    for id in top_pipeline_ids:
-        similar_item_dict.append(get_pipeline_node(id))
+    batch_query = "MATCH (n:Pipeline) WHERE n.itemID IN $ids RETURN properties(n)"
+    res = neo4j_obj.query(batch_query, {'ids': top_pipeline_ids})
+    similar_item_dict = convert_json(res)
     return result_items, similar_item_dict
 
 # get_similar_pipelines("medical image segmentation")

@@ -28,3 +28,6 @@ GraphLearning
 
 .env
 
+
+# Claude Code agent worktrees
+.claude/

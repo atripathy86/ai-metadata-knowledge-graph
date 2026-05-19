@@ -63,6 +63,27 @@ def find_file_path(filename, search_directory="."):
     return None
 
 
+_datasets_cache = None
+_dataset_embedding_ids_cache = None
+_dataset_embeddings_tensor_cache = None
+
+def _ensure_dataset_cache():
+    global _datasets_cache, _dataset_embedding_ids_cache, _dataset_embeddings_tensor_cache
+    if _datasets_cache is not None:
+        return
+    _datasets_cache = get_datasets()
+    filename = 'dataset_embeddings_all.h5'
+    filepath = find_file_path(filename=filename)
+    if filepath is None:
+        raise FileNotFoundError(
+            f"Embedding file '{filename}' not found. Run compute_embeddings.py first."
+        )
+    with h5py.File(filepath, 'r') as f:
+        embedding_ids = f['embedding_ids'][:]
+        embeddings = f['embeddings'][:]
+    _dataset_embedding_ids_cache = [eid.decode('utf-8') for eid in embedding_ids]
+    _dataset_embeddings_tensor_cache = torch.tensor(embeddings).to(DEVICE)
+
 def compute_category(item_tokens):
     tokens = list(item_tokens)
     inter = list(set(tokens).intersection(set(task_category_vocab)))
@@ -195,21 +216,10 @@ def get_modality_sim(query_dataset, task_dict):
 def get_similar_datasets(query_dataset, num_res=3):
     start_time = time.time()
     # test - compute just embedding similarity from all the files
-    data_dict = get_datasets()
-
-    filename = 'dataset_embeddings_all.h5'
-    filepath = find_file_path(filename=filename)
-    if filepath is None:
-        raise FileNotFoundError(
-            f"Embedding file '{filename}' not found. Run compute_embeddings.py first."
-        )
-    with h5py.File(filepath, 'r') as f:
-        # Load the datasets
-        embedding_ids = f['embedding_ids'][:]  # Reads all the IDs
-        embeddings = f['embeddings'][:]    
-
-    dataset_ids = [id.decode('utf-8') for id in embedding_ids]  # Decode if IDs are stored as byte strings
-    embeddings = torch.tensor(embeddings).to(DEVICE)  # Convert embeddings to a torch tensor
+    _ensure_dataset_cache()
+    data_dict = _datasets_cache
+    dataset_ids = _dataset_embedding_ids_cache
+    embeddings = _dataset_embeddings_tensor_cache
 
     query_embedding = torch.tensor(embedding_model.encode(str(query_dataset))).view(1, -1).to(DEVICE)
 
@@ -230,9 +240,9 @@ def get_similar_datasets(query_dataset, num_res=3):
     result_d3_graphs = neo4j_to_d3(neo4j_results)
     result_items = {'nodes': result_d3_graphs['nodes'], 'links':result_d3_graphs['links'], 'explanations':explanations}
     print("Time Taken",time.time()-start_time)
-    similar_item_dict = []
-    for id in top_ids:
-        similar_item_dict.append(get_dataset_nodes(id))
+    batch_query = "MATCH (n:Dataset) WHERE n.itemID IN $ids RETURN properties(n)"
+    res = neo4j_obj.query(batch_query, {'ids': top_ids})
+    similar_item_dict = convert_json(res)
     return result_items, similar_item_dict
 
 # get_similar_datasets("imagenet")
