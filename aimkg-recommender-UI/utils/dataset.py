@@ -4,10 +4,10 @@
 
 task_category_vocab = ['recognition', 'regression','reconstruction', 'segmentation', 'detection', 'generation', 'harmonization', 'translation', 'classification', 'adaptation', 'search', 'analysis',
 'extraction', 'retrieval', 'annotation', 'generalization', 'augmentation', 'anonymization', 'prediction', 'correlation', 'fusion', 'matching', 'synthesis', 'understanding',
-'testing', 'parsing', 'identification', 'transfer', 'spotting', 'estimation', 'resolution', 'clustering', 'separation', 'localization', 'summarization', 'reccommendation',
+'testing', 'parsing', 'identification', 'transfer', 'spotting', 'estimation', 'resolution', 'clustering', 'separation', 'localization', 'summarization', 'recommendation',
 'expansion', 'labeling', 'imaging', 'interpretation', 'captioning', 'retrieval', 'selection', 'assessment', 'registration', 'forecasting', 'planning', 'tracking', 'inference',
 'grounding', 'disambiguation', 'reasoning', 'comprehension', 'reading', 'reduction', 'completion', 'compression', 'decomposition', 'learning', 'sampling', 'verification', 'animation',
-'interpolation', 'visualizaiton', 'propagation', 'mining', 'surveillance', 'diagnosis', 'ranking', 'optimization', 'synthesis', 'anomaly', 'linking']
+'interpolation', 'visualization', 'propagation', 'mining', 'surveillance', 'diagnosis', 'ranking', 'optimization', 'synthesis', 'anomaly', 'linking']
 
 # Task Modality vocabulary
 image_vocab = ['2d', '3d', 'image', 'visual', 'depth', 'pixel', 'voxel', 'RBG', 'action', 'object', 'facial',
@@ -33,6 +33,7 @@ from tqdm import tqdm
 import time
 import h5py
 import glob
+import re
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # DEVICE = torch.device("cpu")
@@ -103,8 +104,7 @@ def compute_modality(item_tokens):
 
 
 def create_tokens(tid):
-    tokens = tid.split("-")
-    return tokens
+    return [t.lower() for t in re.split(r'[-\s]+', tid) if t]
 
 def convert_json(result):
     data_dict = {}
@@ -188,13 +188,15 @@ def get_modality_sim(query_dataset, task_dict):
 
 def get_similar_datasets(query_dataset, num_res=3):
     start_time = time.time()
-    num_res=3
     # test - compute just embedding similarity from all the files
     data_dict = get_datasets()
 
     filename = 'dataset_embeddings_all.h5'
     filepath = find_file_path(filename=filename)
-
+    if filepath is None:
+        raise FileNotFoundError(
+            f"Embedding file '{filename}' not found. Run compute_embeddings.py first."
+        )
     with h5py.File(filepath, 'r') as f:
         # Load the datasets
         embedding_ids = f['embedding_ids'][:]  # Reads all the IDs
