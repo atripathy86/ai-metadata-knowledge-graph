@@ -1,9 +1,9 @@
 task_category_vocab = ['recognition', 'regression','reconstruction', 'segmentation', 'detection', 'generation', 'harmonization', 'translation', 'classification', 'adaptation', 'search', 'analysis',
 'extraction', 'retrieval', 'annotation', 'generalization', 'augmentation', 'anonymization', 'prediction', 'correlation', 'fusion', 'matching', 'synthesis', 'understanding',
-'testing', 'parsing', 'identification', 'transfer', 'spotting', 'estimation', 'resolution', 'clustering', 'separation', 'localization', 'summarization', 'reccommendation',
+'testing', 'parsing', 'identification', 'transfer', 'spotting', 'estimation', 'resolution', 'clustering', 'separation', 'localization', 'summarization', 'recommendation',
 'expansion', 'labeling', 'imaging', 'interpretation', 'captioning', 'retrieval', 'selection', 'assessment', 'registration', 'forecasting', 'planning', 'tracking', 'inference',
 'grounding', 'disambiguation', 'reasoning', 'comprehension', 'reading', 'reduction', 'completion', 'compression', 'decomposition', 'learning', 'sampling', 'verification', 'animation',
-'interpolation', 'visualizaiton', 'propagation', 'mining', 'surveillance', 'diagnosis', 'ranking', 'optimization', 'synthesis', 'anomaly', 'linking']
+'interpolation', 'visualization', 'propagation', 'mining', 'surveillance', 'diagnosis', 'ranking', 'optimization', 'synthesis', 'anomaly', 'linking']
 
 # Task Modality vocabulary
 image_vocab = ['2d', '3d', 'image', 'visual', 'depth', 'pixel', 'voxel', 'RBG', 'action', 'object', 'facial',
@@ -29,6 +29,7 @@ import torch.nn.functional as F
 import time
 import h5py
 import glob
+import re
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # DEVICE = torch.device("cpu")
@@ -46,10 +47,16 @@ neo4j_obj = Neo4jConnection(uri=URI,
                     pwd=PASSWORD)
 
 
+_file_path_cache = {}
+
 def find_file_path(filename, search_directory="."):
-    # Use glob to search recursively in the current directory for the file
+    if filename in _file_path_cache:
+        return _file_path_cache[filename]
     for file_path in glob.iglob(f"{search_directory}/**/{filename}", recursive=True):
-        return os.path.abspath(file_path)
+        path = os.path.abspath(file_path)
+        _file_path_cache[filename] = path
+        return path
+    _file_path_cache[filename] = None
     return None
 
 def compute_category(item_tokens):
@@ -99,9 +106,7 @@ def compute_modality(item_tokens):
 
 
 def create_tokens(tid):
-    tokens_ = tid.split(" ")
-    tokens = [t.lower() for t in tokens_]
-    return tokens
+    return [t.lower() for t in re.split(r'[-\s]+', tid) if t]
 
 def convert_json(result):
     data_dict = {}
@@ -197,7 +202,6 @@ def get_category_sim(query_task, task_dict):
 def get_similar_pipelines(query_pipeline, num_res=10):
     print("similar pipeline function called")
     start_time = time.time()
-    num_res=3
     # check if we are able to calculate modality or category
     # if there are values, then pass this as constraint and pick only those tasks for similarity computation
     # Or, use the stored files and compute cosine similarity.. pick top 200 results and compute custom similarity only for those?
@@ -209,6 +213,10 @@ def get_similar_pipelines(query_pipeline, num_res=10):
 
     filename = 'pipeline_embeddings_all.h5'
     filepath = find_file_path(filename=filename)
+    if filepath is None:
+        raise FileNotFoundError(
+            f"Embedding file '{filename}' not found. Run compute_embeddings.py first."
+        )
     with h5py.File(filepath, 'r') as f:
         # Load the datasets
         embedding_ids = f['embedding_ids'][:]  # Reads all the IDs

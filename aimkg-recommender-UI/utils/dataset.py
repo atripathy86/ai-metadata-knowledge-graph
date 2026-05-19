@@ -4,10 +4,10 @@
 
 task_category_vocab = ['recognition', 'regression','reconstruction', 'segmentation', 'detection', 'generation', 'harmonization', 'translation', 'classification', 'adaptation', 'search', 'analysis',
 'extraction', 'retrieval', 'annotation', 'generalization', 'augmentation', 'anonymization', 'prediction', 'correlation', 'fusion', 'matching', 'synthesis', 'understanding',
-'testing', 'parsing', 'identification', 'transfer', 'spotting', 'estimation', 'resolution', 'clustering', 'separation', 'localization', 'summarization', 'reccommendation',
+'testing', 'parsing', 'identification', 'transfer', 'spotting', 'estimation', 'resolution', 'clustering', 'separation', 'localization', 'summarization', 'recommendation',
 'expansion', 'labeling', 'imaging', 'interpretation', 'captioning', 'retrieval', 'selection', 'assessment', 'registration', 'forecasting', 'planning', 'tracking', 'inference',
 'grounding', 'disambiguation', 'reasoning', 'comprehension', 'reading', 'reduction', 'completion', 'compression', 'decomposition', 'learning', 'sampling', 'verification', 'animation',
-'interpolation', 'visualizaiton', 'propagation', 'mining', 'surveillance', 'diagnosis', 'ranking', 'optimization', 'synthesis', 'anomaly', 'linking']
+'interpolation', 'visualization', 'propagation', 'mining', 'surveillance', 'diagnosis', 'ranking', 'optimization', 'synthesis', 'anomaly', 'linking']
 
 # Task Modality vocabulary
 image_vocab = ['2d', '3d', 'image', 'visual', 'depth', 'pixel', 'voxel', 'RBG', 'action', 'object', 'facial',
@@ -33,6 +33,7 @@ from tqdm import tqdm
 import time
 import h5py
 import glob
+import re
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # DEVICE = torch.device("cpu")
@@ -49,10 +50,16 @@ neo4j_obj = Neo4jConnection(uri=URI,
                     user=USER,
                     pwd=PASSWORD)
 
+_file_path_cache = {}
+
 def find_file_path(filename, search_directory="."):
-    # Use glob to search recursively in the current directory for the file
+    if filename in _file_path_cache:
+        return _file_path_cache[filename]
     for file_path in glob.iglob(f"{search_directory}/**/{filename}", recursive=True):
-        return os.path.abspath(file_path)
+        path = os.path.abspath(file_path)
+        _file_path_cache[filename] = path
+        return path
+    _file_path_cache[filename] = None
     return None
 
 
@@ -103,8 +110,7 @@ def compute_modality(item_tokens):
 
 
 def create_tokens(tid):
-    tokens = tid.split("-")
-    return tokens
+    return [t.lower() for t in re.split(r'[-\s]+', tid) if t]
 
 def convert_json(result):
     data_dict = {}
@@ -153,16 +159,16 @@ def get_result_pipelines(dataset_ids):
     return results
 
 
-def get_explanations(query_task, top_task_ids, task_dict):
+def get_explanations(query_task, top_task_ids, top_sim_scores, task_dict):
     explanations = [] #first element is always query task
-    explanations.append({'title':'Query', 'content': {'Name': query_task.title(), 'Label': 'Dataset', 
+    explanations.append({'title':'Query', 'content': {'Name': query_task.title(), 'Label': 'Dataset',
                          'Properties Computed': {'Modality':compute_modality([i.lower() for i in query_task.split(" ")]),
                                                  }}})
     for i, tid in enumerate(top_task_ids):
         curr_item = task_dict[tid]
-        explanations.append({'title':'Recommendation-'+str(i+1), 'content':{'Name': curr_item['name'].title(), 'Similarity Score':'', 
+        explanations.append({'title':'Recommendation-'+str(i+1), 'content':{'Name': curr_item['name'].title(), 'Similarity Score':str(round(top_sim_scores[i].item(), 3)),
                              'Similar Properties':{'Tokens':curr_item['tokens'], 'Modality':curr_item['modality']}}})
-    
+
     return explanations
 
 
@@ -188,13 +194,15 @@ def get_modality_sim(query_dataset, task_dict):
 
 def get_similar_datasets(query_dataset, num_res=3):
     start_time = time.time()
-    num_res=3
     # test - compute just embedding similarity from all the files
     data_dict = get_datasets()
 
     filename = 'dataset_embeddings_all.h5'
     filepath = find_file_path(filename=filename)
-
+    if filepath is None:
+        raise FileNotFoundError(
+            f"Embedding file '{filename}' not found. Run compute_embeddings.py first."
+        )
     with h5py.File(filepath, 'r') as f:
         # Load the datasets
         embedding_ids = f['embedding_ids'][:]  # Reads all the IDs
@@ -216,7 +224,8 @@ def get_similar_datasets(query_dataset, num_res=3):
     sorted_tensor, sorted_indices = torch.sort(mean_sim, descending=True)
     indices = sorted_indices[:num_res]
     top_ids = [dataset_ids[idx] for idx in indices]
-    explanations = get_explanations(query_dataset, top_ids, data_dict)
+    top_sim_scores = sorted_tensor[:num_res]
+    explanations = get_explanations(query_dataset, top_ids, top_sim_scores, data_dict)
     neo4j_results = get_result_pipelines(top_ids)
     result_d3_graphs = neo4j_to_d3(neo4j_results)
     result_items = {'nodes': result_d3_graphs['nodes'], 'links':result_d3_graphs['links'], 'explanations':explanations}
