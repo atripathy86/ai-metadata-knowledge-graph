@@ -1,7 +1,7 @@
-Flask
-neo4j
-python-dotenv
-pandas
-sentence-transformers
-torch
-h5py
+Flask>=2.3,<4.0
+neo4j>=5.0,<6.0
+python-dotenv>=1.0,<2.0
+pandas>=2.0,<3.0
+sentence-transformers>=2.7,<4.0
+torch>=2.0,<3.0
+h5py>=3.8,<4.0
