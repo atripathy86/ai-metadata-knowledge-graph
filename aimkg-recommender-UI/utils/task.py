@@ -233,22 +233,10 @@ def get_similar_tasks(query_task, num_res=3):
     # have the option to include or exclude modality and category computation in similarity calculation if category and modality are not available
     
     # test - compute just embedding similarity from all the files
-    task_dict = get_tasks()
-
-
-    filename = 'task_embeddings_all.h5'
-    filepath = find_file_path(filename=filename)
-    if filepath is None:
-        raise FileNotFoundError(
-            f"Embedding file '{filename}' not found. Run compute_embeddings.py first."
-        )
-    with h5py.File(filepath, 'r') as f:
-        # Load the datasets
-        embedding_ids = f['embedding_ids'][:]  # Reads all the IDs
-        embeddings = f['embeddings'][:]    
-
-    task_ids = [id.decode('utf-8') for id in embedding_ids]  # Decode if IDs are stored as byte strings
-    embeddings = torch.tensor(embeddings).to(DEVICE)  # Convert embeddings to a torch tensor
+    _ensure_task_cache()
+    task_dict = _tasks_cache
+    task_ids = _task_embedding_ids_cache
+    embeddings = _task_embeddings_tensor_cache
 
     query_embedding = torch.tensor(embedding_model.encode(str(query_task))).view(1, -1).to(DEVICE)
 
@@ -270,9 +258,9 @@ def get_similar_tasks(query_task, num_res=3):
     result_d3_graphs = neo4j_to_d3(neo4j_results)
     result_items = {'nodes': result_d3_graphs['nodes'], 'links':result_d3_graphs['links'], 'explanations':explanations}
     print("Time Taken:",time.time()-start_time)
-    similar_item_dict = []
-    for id in top_task_ids:
-        similar_item_dict.append(get_task_nodes(id))
+    batch_query = "MATCH (n:Task) WHERE n.itemID IN $ids RETURN properties(n)"
+    res = neo4j_obj.query(batch_query, {'ids': top_task_ids})
+    similar_item_dict = convert_json(res)
     return result_items, similar_item_dict
 
 # get_similar_tasks("medical image segmentation")
